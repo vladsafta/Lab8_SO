@@ -1,0 +1,113 @@
+//Cod pentru windows
+
+#include <windows.h>
+#include <iostream>
+#include <thread>
+#include <vector>
+
+using namespace std;
+
+// Structuri globale pentru sincronizare
+CRITICAL_SECTION mutex; // Protejează accesul la secțiunile critice
+HANDLE sem_white;       // Semafor pentru fire albe
+HANDLE sem_black;       // Semafor pentru fire negre
+
+// Variabile partajate
+int active_white = 0, active_black = 0;   // Fire active pentru fiecare tip
+int waiting_white = 0, waiting_black = 0; // Fire în așteptare
+int current_type = 0;                    // 0 = niciun tip, 1 = alb, 2 = negru
+
+// Funcție pentru utilizarea resursei (simulată)
+void use_resource(int id, const char* type) {
+    cout << "Thread " << id << " (" << type << ") is using the resource.\n";
+    this_thread::sleep_for(chrono::seconds(1)); // Simulează utilizarea resursei
+}
+
+// Fir de tip alb
+void white_thread(int id) {
+    EnterCriticalSection(&mutex);
+    waiting_white++;
+    while (active_black > 0 || (current_type == 2 && waiting_black > 0)) {
+        LeaveCriticalSection(&mutex);
+        WaitForSingleObject(sem_white, INFINITE); // Așteaptă semaforul pentru albi
+        EnterCriticalSection(&mutex);
+    }
+    waiting_white--;
+    active_white++;
+    current_type = 1;
+    LeaveCriticalSection(&mutex);
+
+    // Utilizarea resursei
+    use_resource(id, "white");
+
+    EnterCriticalSection(&mutex);
+    active_white--;
+    if (active_white == 0 && waiting_black > 0) {
+        current_type = 2;
+        for (int i = 0; i < waiting_black; i++) {
+            ReleaseSemaphore(sem_black, 1, NULL); // Eliberează firele negre
+        }
+    }
+    LeaveCriticalSection(&mutex);
+}
+
+// Fir de tip negru
+void black_thread(int id) {
+    EnterCriticalSection(&mutex);
+    waiting_black++;
+    while (active_white > 0 || (current_type == 1 && waiting_white > 0)) {
+        LeaveCriticalSection(&mutex);
+        WaitForSingleObject(sem_black, INFINITE); // Așteaptă semaforul pentru negri
+        EnterCriticalSection(&mutex);
+    }
+    waiting_black--;
+    active_black++;
+    current_type = 2;
+    LeaveCriticalSection(&mutex);
+
+    // Utilizarea resursei
+    use_resource(id, "black");
+
+    EnterCriticalSection(&mutex);
+    active_black--;
+    if (active_black == 0 && waiting_white > 0) {
+        current_type = 1;
+        for (int i = 0; i < waiting_white; i++) {
+            ReleaseSemaphore(sem_white, 1, NULL); // Eliberează firele albe
+        }
+    }
+    LeaveCriticalSection(&mutex);
+}
+
+// Funcție principală
+int main() {
+    // Inițializare
+    InitializeCriticalSection(&mutex);
+    sem_white = CreateSemaphore(NULL, 0, INT_MAX, NULL); // Semafor pentru albi
+    sem_black = CreateSemaphore(NULL, 0, INT_MAX, NULL); // Semafor pentru negri
+
+    const int NUM_THREADS = 10; // Numărul total de fire
+    vector<thread> threads;
+
+    // Creează fire alternante (albe și negre)
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        if (i % 2 == 0) {
+            threads.emplace_back(white_thread, i);
+        }
+        else {
+            threads.emplace_back(black_thread, i);
+        }
+    }
+
+    // Așteaptă finalizarea tuturor firelor
+    for (auto& th : threads) {
+        th.join();
+    }
+
+    // Cleanup
+    CloseHandle(sem_white);
+    CloseHandle(sem_black);
+    DeleteCriticalSection(&mutex);
+
+    return 0;
+}
