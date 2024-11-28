@@ -1,0 +1,113 @@
+//Codul pentru Linux
+
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <semaphore.h>
+#include <unistd.h> // Pentru sleep()
+
+using namespace std;
+
+// Structuri globale pentru sincronizare
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; // Protejează accesul la variabile partajate
+sem_t sem_white; // Semafor pentru firele albe
+sem_t sem_black; // Semafor pentru firele negre
+
+// Variabile partajate
+int active_white = 0, active_black = 0;   // Fire active pentru fiecare tip
+int waiting_white = 0, waiting_black = 0; // Fire în așteptare
+int current_type = 0;                    // 0 = niciun tip, 1 = alb, 2 = negru
+
+// Funcție pentru utilizarea resursei (simulată)
+void use_resource(int id, const char* type) {
+    cout << "Thread " << id << " (" << type << ") is using the resource.\n";
+    sleep(1); // Simulează utilizarea resursei
+}
+
+// Fir de tip alb
+void white_thread(int id) {
+    pthread_mutex_lock(&mutex);
+    waiting_white++;
+    while (active_black > 0 || (current_type == 2 && waiting_black > 0)) {
+        pthread_mutex_unlock(&mutex);
+        sem_wait(&sem_white); // Așteaptă semaforul pentru albi
+        pthread_mutex_lock(&mutex);
+    }
+    waiting_white--;
+    active_white++;
+    current_type = 1;
+    pthread_mutex_unlock(&mutex);
+
+    // Utilizarea resursei
+    use_resource(id, "white");
+
+    pthread_mutex_lock(&mutex);
+    active_white--;
+    if (active_white == 0 && waiting_black > 0) {
+        current_type = 2;
+        for (int i = 0; i < waiting_black; i++) {
+            sem_post(&sem_black); // Eliberează firele negre
+        }
+    }
+    pthread_mutex_unlock(&mutex);
+}
+
+// Fir de tip negru
+void black_thread(int id) {
+    pthread_mutex_lock(&mutex);
+    waiting_black++;
+    while (active_white > 0 || (current_type == 1 && waiting_white > 0)) {
+        pthread_mutex_unlock(&mutex);
+        sem_wait(&sem_black); // Așteaptă semaforul pentru negri
+        pthread_mutex_lock(&mutex);
+    }
+    waiting_black--;
+    active_black++;
+    current_type = 2;
+    pthread_mutex_unlock(&mutex);
+
+    // Utilizarea resursei
+    use_resource(id, "black");
+
+    pthread_mutex_lock(&mutex);
+    active_black--;
+    if (active_black == 0 && waiting_white > 0) {
+        current_type = 1;
+        for (int i = 0; i < waiting_white; i++) {
+            sem_post(&sem_white); // Eliberează firele albe
+        }
+    }
+    pthread_mutex_unlock(&mutex);
+}
+
+// Funcție principală
+int main() {
+    // Inițializare semafoare
+    sem_init(&sem_white, 0, 0); // Semafor pentru albi
+    sem_init(&sem_black, 0, 0); // Semafor pentru negri
+
+    const int NUM_THREADS = 10; // Numărul total de fire
+    vector<thread> threads;
+
+    // Creează fire alternante (albe și negre)
+    for (int i = 0; i < NUM_THREADS; ++i) {
+        if (i % 2 == 0) {
+            threads.emplace_back(white_thread, i);
+        }
+        else {
+            threads.emplace_back(black_thread, i);
+        }
+    }
+
+    // Așteaptă finalizarea tuturor firelor
+    for (auto& th : threads) {
+        th.join();
+    }
+
+    // Cleanup
+    sem_destroy(&sem_white);
+    sem_destroy(&sem_black);
+    pthread_mutex_destroy(&mutex);
+
+    return 0;
+}
